@@ -2,6 +2,10 @@
 Google新聞即時爬蟲
 程式碼撰寫: 蘇彥庭
 日期: 20210111
+
+程式修改日期: 2023/04/08
+1. 處理Google RSS連結: 原本為新聞連結 現在被改為Google頁面連結 連結該Google頁面後才會被轉向實際新聞連結
+2. 修改經濟日報新聞內容抓取方式
 """
 
 # 載入套件
@@ -25,7 +29,7 @@ def arrangeGoogleNews(elem):
     return ([elem.find('title').getText(),
              elem.find('link').getText(),
              elem.find('pubDate').getText(),
-             elem.find('description').getText(),
+             BeautifulSoup(elem.find('description').getText(), 'html.parser').find('a').getText(),
              elem.find('source').getText()])
 
 
@@ -36,12 +40,18 @@ def beautifulSoupNews(url):
     headers = {'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
                              'Chrome/87.0.4280.141 Safari/537.36'}
 
-    # 下載網站原始碼
+    # 取得Google跳轉頁面的新聞連結
     response = requests.get(url, headers=headers)
     soup = BeautifulSoup(response.text, 'html.parser')
+    newsUrl = soup.find_all('c-wiz', class_='jtabgf')[0].getText()
+    newsUrl = newsUrl.replace('Opening ', '')
+
+    # 取得該篇新聞連結內容
+    response = requests.get(newsUrl, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser') 
 
     # 判斷url網域做對應文章擷取
-    domain = re.findall('https://[^/]*', url)[0].replace('https://', '')
+    domain = re.findall('https://[^/]*', newsUrl)[0].replace('https://', '')
 
     if domain == 'udn.com':
 
@@ -74,7 +84,7 @@ def beautifulSoupNews(url):
     elif domain == 'money.udn.com':
 
         # 經濟日報
-        item = soup.find_all('div', id='article_body')[0].find_all('p')
+        item = soup.find_all('section', id='article_body')[0].find_all('p')
         content = [elem.getText() for elem in item]
         content = [elem for elem in content]
         content = ''.join(content)
@@ -127,9 +137,9 @@ def beautifulSoupNews(url):
     else:
 
         # 未知domain
-        content = ['unknow domain']
+        content = 'unknow domain'
 
-    return content
+    return newsUrl, content
 
 
 # 迴圈下載股票清單的Google新聞資料
@@ -155,23 +165,29 @@ for iSearch in range(len(searchList)):
     df.insert(1, 'search_key', searchList[iSearch], True)
     # 篩選最近的新聞
     df['pub_date'] = df['pub_date'].astype('datetime64[ns]')
-    df = df[df['pub_date'] >= nearStartDate].reset_index(drop=True)
+    df = df[df['pub_date'] >= nearStartDate]
+    # 按發布時間排序
+    df = df.sort_values(['pub_date']).reset_index(drop=True)
 
-    # 迴圈爬取新聞內容
-    content = list()
+    # 迴圈爬取新聞連結與內容
+    newsUrls = list()
+    contents = list()
     for iLink in range(len(df['link'])):
 
         print('目前正在下載: ' + searchList[iSearch] +
               ' 各家新聞  進度: ' + str(iLink + 1) + ' / ' + str(len(df['link'])))
 
-        content.append(beautifulSoupNews(url=df['link'][iLink]))
+        newsUrl, content = beautifulSoupNews(url=df['link'][iLink])
+        newsUrls.append(newsUrl)
+        contents.append(content)
         time.sleep(3)
 
-    # 新增新聞內容欄位
-    df['content'] = content
+    # 新增新聞連結與內容欄位
+    df['newsUrl'] = newsUrls
+    df['content'] = contents
 
     # 儲存資料
     stockNews = pd.concat([stockNews, df])
 
 # 輸出結果檢查
-stockNews.to_csv('checkData.csv', index=False)
+stockNews.to_csv('checkData.csv', index=False, encoding='utf-8-sig')
